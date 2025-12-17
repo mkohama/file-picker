@@ -66,6 +66,7 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
+
 init_state()
 
 
@@ -117,6 +118,14 @@ def load_config():
     ]:
         if k in data:
             st.session_state[k] = data[k]
+
+    # ウィジェットキーも更新（テキスト入力欄に反映させるため）
+    if "search_path" in data:
+        st.session_state._search_path_input = data["search_path"]
+    if "dest_path" in data:
+        st.session_state._dest_path_input = data["dest_path"]
+    if "filter_text" in data:
+        st.session_state._filter_text_input = data["filter_text"]
 
     return True
 
@@ -217,16 +226,18 @@ def subversion_key(subver: str):
         return (99999999,)
     try:
         return (int(subver),)
-    except:
+    except Exception:
         return (0,)
 
 
 @st.cache_data(show_spinner=False)
-def search_files(root: str, exclude_dirs: list, include_exts: list, exclude_file_patterns: list):
+def search_files(
+    root: str, exclude_dirs: list, include_exts: list, exclude_file_patterns: list
+):
     entries = []
     exclude_dirs_norm = set(d.lower() for d in exclude_dirs)
     include_exts_norm = set(e.lower() for e in include_exts)
-    
+
     file_patterns = normalize_exclude_file_patterns(exclude_file_patterns)
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -234,20 +245,20 @@ def search_files(root: str, exclude_dirs: list, include_exts: list, exclude_file
         for fn in filenames:
             if is_excluded_filename(fn, file_patterns):
                 continue
-            
+
             ext = os.path.splitext(fn)[1].lower()
-            
+
             if include_exts_norm and ext not in include_exts_norm:
                 continue
-            
+
             abs_path = os.path.join(dirpath, fn)
             rel_path = os.path.relpath(abs_path, root)
             version = find_version_from_relpath(rel_path)
-            
+
             # ★ 追加：日付とベース名を抽出
             date = extract_date_from_filename(fn)
             base_name = get_base_filename(fn)
-            
+
             entries.append(
                 {
                     "file_name": fn,
@@ -259,6 +270,7 @@ def search_files(root: str, exclude_dirs: list, include_exts: list, exclude_file
                 }
             )
     return entries
+
 
 @st.cache_data(show_spinner=False)
 def build_group_struct(entries):
@@ -278,24 +290,24 @@ def build_group_struct(entries):
     # ★ ステップ2：各グループ内でバージョンとサブバージョンを整理
     for base_name, items in groups.items():
         ver_subver_map = {}  # {version: {subversion: entry}}
-        
+
         for e in items:
             ver = e["version"]
             fn = e["file_name"]
-            
+
             # ファイル名から日付（サブバージョン）を抽出
             date_match = re.search(r"_(\d{8})(?=\.\w+$)", fn)
             subver = date_match.group(1) if date_match else "-"
-            
+
             if ver not in ver_subver_map:
                 ver_subver_map[ver] = {}
-            
+
             ver_subver_map[ver][subver] = e
-        
+
         # バージョンをソート
         versions_sorted = sorted(ver_subver_map.keys(), key=version_key, reverse=True)
         versions_map[base_name] = versions_sorted
-        
+
         # サブバージョンマップを作成
         subversions_map[base_name] = {}
         for ver in versions_sorted:
@@ -303,27 +315,43 @@ def build_group_struct(entries):
             subvers = sorted(
                 ver_subver_map[ver].keys(),
                 key=lambda x: ("", x) if x == "-" else ("z", x),
-                reverse=True
+                reverse=True,
             )
             subversions_map[base_name][ver] = subvers
-        
+
         # エントリマップを構築
         ver_subver_to_entry_map[base_name] = ver_subver_map
-        
+
         # 後方互換性のため ver_to_entry_map も保持（最新サブバージョンを使用）
         ver_to_entry_map[base_name] = {}
         for ver in versions_sorted:
             latest_subver = subversions_map[base_name][ver][0]
             ver_to_entry_map[base_name][ver] = ver_subver_map[ver][latest_subver]
-        
+
         # グループのアイテムをソート
-        items.sort(key=lambda x: (
-            version_key(x["version"]),
-            ("", re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"]).group(1) if re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"]) else "-")
-        ), reverse=True)
+        items.sort(
+            key=lambda x: (
+                version_key(x["version"]),
+                (
+                    "",
+                    (
+                        re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"]).group(1)
+                        if re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"])
+                        else "-"
+                    ),
+                ),
+            ),
+            reverse=True,
+        )
         groups[base_name] = items
 
-    return groups, versions_map, ver_to_entry_map, ver_subver_to_entry_map, subversions_map
+    return (
+        groups,
+        versions_map,
+        ver_to_entry_map,
+        ver_subver_to_entry_map,
+        subversions_map,
+    )
 
 
 # ========= UI =========
@@ -352,17 +380,24 @@ with st.expander("設定の保存／ロード", expanded=False):
                     inc_exts = normalize_include_exts(st.session_state.include_exts)
                     ex_patterns = st.session_state.exclude_file_patterns
 
-
                     entries = search_files(
                         st.session_state.search_path, ex_dirs, inc_exts, ex_patterns
                     )
-                    groups, versions_map, ver_to_entry_map, ver_subver_to_entry_map, subversions_map = build_group_struct(entries)
+                    (
+                        groups,
+                        versions_map,
+                        ver_to_entry_map,
+                        ver_subver_to_entry_map,
+                        subversions_map,
+                    ) = build_group_struct(entries)
 
                     st.session_state.entries = entries
                     st.session_state.groups = groups
                     st.session_state.versions_map = versions_map
                     st.session_state.ver_to_entry_map = ver_to_entry_map
-                    st.session_state.ver_subver_to_entry_map = ver_subver_to_entry_map  # ← 追加
+                    st.session_state.ver_subver_to_entry_map = (
+                        ver_subver_to_entry_map  # ← 追加
+                    )
                     st.session_state.subversions_map = subversions_map  # ← 追加
 
                     for fn in groups:
@@ -371,7 +406,9 @@ with st.expander("設定の保存／ロード", expanded=False):
                         if fn not in st.session_state.selected_version:
                             latest_ver = versions_map[fn][0]
                             st.session_state.selected_version[fn] = latest_ver
-                            st.session_state.selected_subversion[fn] = subversions_map[fn][latest_ver][0]
+                            st.session_state.selected_subversion[fn] = subversions_map[
+                                fn
+                            ][latest_ver][0]
 
                     st.info(f"再検索しました（{len(entries)} 件）")
 
@@ -379,31 +416,51 @@ with st.expander("設定の保存／ロード", expanded=False):
 # ---------- 検索条件 ----------
 with st.expander("検索条件", expanded=True):
 
-    st.session_state.search_path = st.text_input(
-        "検索対象フォルダ", value=st.session_state.search_path
+    st.text_input(
+        "検索対象フォルダ",
+        value=st.session_state.search_path,
+        key="_search_path_input",
+        on_change=lambda: setattr(
+            st.session_state, "search_path", st.session_state._search_path_input
+        ),
     )
 
     if st.session_state.search_history:
-        sel = st.selectbox(
-            "最近使った検索フォルダ", ["- 選択 -"] + st.session_state.search_history
+
+        def on_search_history_change():
+            sel = st.session_state._search_history_select
+            if sel != "- 選択 -":
+                st.session_state.search_path = sel
+                st.session_state._search_path_input = sel
+
+        st.selectbox(
+            "最近使った検索フォルダ",
+            ["- 選択 -"] + st.session_state.search_history,
+            key="_search_history_select",
+            on_change=on_search_history_change,
         )
-        if sel != "- 選択 -":
-            st.session_state.search_path = sel
 
-    st.session_state.exclude_dirs = st.text_input(
-        "除外フォルダ名（カンマ区切り）", value=", ".join(st.session_state.exclude_dirs)
-    ).split(",")
+    exclude_dirs_input = st.text_input(
+        "除外フォルダ名（カンマ区切り）",
+        value=", ".join(s.strip() for s in st.session_state.exclude_dirs if s.strip()),
+    )
+    st.session_state.exclude_dirs = [
+        s.strip() for s in exclude_dirs_input.split(",") if s.strip()
+    ]
 
-    st.session_state.include_exts = st.text_input(
-        "対象拡張子（カンマ区切り、空欄=すべて）", 
-        value=", ".join(st.session_state.include_exts)
-    ).split(",")
+    include_exts_input = st.text_input(
+        "対象拡張子（カンマ区切り、空欄=すべて）",
+        value=", ".join(s.strip() for s in st.session_state.include_exts if s.strip()),
+    )
+    st.session_state.include_exts = [
+        s.strip() for s in include_exts_input.split(",") if s.strip()
+    ]
 
     st.session_state.exclude_file_patterns = st.text_area(
         "除外ファイル名パターン（正規表現、1行1パターン）",
         value="\n".join(st.session_state.exclude_file_patterns),
         height=100,
-        help="例: ^~.* (チルダで始まる), .*コピー.* (コピーを含む)"
+        help="例: ^~.* (チルダで始まる), .*コピー.* (コピーを含む)",
     ).split("\n")
 
     col = st.columns([1, 1, 5])
@@ -422,7 +479,13 @@ with st.expander("検索条件", expanded=True):
             ex_patterns = st.session_state.exclude_file_patterns
 
             entries = search_files(path, ex_dirs, inc_exts, ex_patterns)
-            groups, versions_map, ver_to_entry_map, ver_subver_to_entry_map, subversions_map = build_group_struct(entries)
+            (
+                groups,
+                versions_map,
+                ver_to_entry_map,
+                ver_subver_to_entry_map,
+                subversions_map,
+            ) = build_group_struct(entries)
 
             st.session_state.entries = entries
             st.session_state.groups = groups
@@ -461,15 +524,22 @@ if st.session_state.groups:
 
     total_files = len(st.session_state.entries)
     total_groups = len(st.session_state.groups)
-    selected_count = sum(v for v in st.session_state.selected_group.values())
+
+    # selected_group から選択数を計算
+    selected_count = sum(1 for v in st.session_state.selected_group.values() if v)
 
     m0, m1, m2 = st.columns(3)
     m0.metric("見つかったファイル数", total_files)
     m1.metric("ファイル名グループ数", total_groups)
     m2.metric("選択中", selected_count)
 
-    st.session_state.filter_text = st.text_input(
-        "ファイル名フィルタ（部分一致）", value=st.session_state.filter_text
+    st.text_input(
+        "ファイル名フィルタ（部分一致）",
+        value=st.session_state.filter_text,
+        key="_filter_text_input",
+        on_change=lambda: setattr(
+            st.session_state, "filter_text", st.session_state._filter_text_input
+        ),
     )
 
     filtered = [
@@ -490,21 +560,26 @@ if st.session_state.groups:
         (len(filtered) + st.session_state.page_size - 1) // st.session_state.page_size,
     )
 
+    # ページ番号がtotal_pagesを超えないように制限（フィルタ適用で件数が減った場合の対策）
+    if st.session_state.page > total_pages:
+        st.session_state.page = total_pages
+
     # ナビゲーションボタン
     nav = st.columns([1, 1, 2, 1, 1])
-    
+
     with nav[0]:
         if st.button("◀◀ 最初", key="page_first"):
             st.session_state.page = 1
-    
+
     with nav[1]:
         if st.button("◀ 前へ", key="page_prev"):
             st.session_state.page = max(1, st.session_state.page - 1)
-    
+
     with nav[2]:
+
         def on_page_change():
             st.session_state.page = st.session_state.page_input_widget
-        
+
         st.number_input(
             "ページジャンプ",
             min_value=1,
@@ -513,13 +588,13 @@ if st.session_state.groups:
             step=1,
             key="page_input_widget",
             on_change=on_page_change,
-            help="ページ番号を入力してジャンプ"
+            help="ページ番号を入力してジャンプ",
         )
-    
+
     with nav[3]:
         if st.button("次へ ▶", key="page_next"):
             st.session_state.page = min(total_pages, st.session_state.page + 1)
-    
+
     with nav[4]:
         if st.button("最後 ▶▶", key="page_last"):
             st.session_state.page = total_pages
@@ -552,7 +627,6 @@ if st.session_state.groups:
                     st.session_state[f"sel_{fn}"] = False
                 st.rerun()
 
-
     with st.expander("全体操作（検索結果すべて）", expanded=False):
         c2 = st.columns([1, 1, 1])  # ← 3列に変更
 
@@ -563,18 +637,21 @@ if st.session_state.groups:
                     if st.session_state.versions_map.get(fn):
                         latest = st.session_state.versions_map[fn][0]
 
-                        st.session_state[f"ver_{fn}"] = latest
                         st.session_state.selected_version[fn] = latest
-                        
+
                         # サブバージョンも最新に設定
-                        latest_subversions = st.session_state.subversions_map.get(fn, {}).get(latest, ["-"])
+                        latest_subversions = st.session_state.subversions_map.get(
+                            fn, {}
+                        ).get(latest, ["-"])
                         if fn not in st.session_state.selected_subversion:
                             st.session_state.selected_subversion[fn] = {}
-                        st.session_state.selected_subversion[fn][latest] = latest_subversions[0]
-                        
+                        st.session_state.selected_subversion[fn][latest] = (
+                            latest_subversions[0]
+                        )
+
                         st.session_state.selected_group[fn] = True
                         st.session_state[f"sel_{fn}"] = True
-                
+
                 st.rerun()
 
         # 全体：最古版を選択
@@ -584,18 +661,21 @@ if st.session_state.groups:
                     if st.session_state.versions_map.get(fn):
                         oldest = st.session_state.versions_map[fn][-1]
 
-                        st.session_state[f"ver_{fn}"] = oldest
                         st.session_state.selected_version[fn] = oldest
-                        
+
                         # サブバージョンも最古に設定
-                        oldest_subversions = st.session_state.subversions_map.get(fn, {}).get(oldest, ["-"])
+                        oldest_subversions = st.session_state.subversions_map.get(
+                            fn, {}
+                        ).get(oldest, ["-"])
                         if fn not in st.session_state.selected_subversion:
                             st.session_state.selected_subversion[fn] = {}
-                        st.session_state.selected_subversion[fn][oldest] = oldest_subversions[-1]
-                        
+                        st.session_state.selected_subversion[fn][oldest] = (
+                            oldest_subversions[-1]
+                        )
+
                         st.session_state.selected_group[fn] = True
                         st.session_state[f"sel_{fn}"] = True
-                
+
                 st.rerun()
 
         # ★ 追加：全体：選択解除
@@ -604,36 +684,40 @@ if st.session_state.groups:
                 for fn in filtered:
                     st.session_state.selected_group[fn] = False
                     st.session_state[f"sel_{fn}"] = False
-                
+
                 st.rerun()
 
     st.divider()
 
-    # ★ 修正：初期化されていない場合のみ同期
-    for fn in disp:
-        if f"sel_{fn}" not in st.session_state:
-            st.session_state[f"sel_{fn}"] = st.session_state.selected_group.get(fn, False)
+    # チェックボックス用コールバック関数を生成
+    def make_checkbox_callback(file_name):
+        def callback():
+            st.session_state.selected_group[file_name] = st.session_state[
+                f"sel_{file_name}"
+            ]
+
+        return callback
 
     for fn in disp:
         versions = st.session_state.versions_map[fn]
         ver = st.session_state.selected_version[fn]
-        
+
         # ★ 追加：サブバージョン（日付）の取得
         subversions = st.session_state.subversions_map.get(fn, {}).get(ver, ["-"])
-        
+
         # ★ 修正：サブバージョンの初期化（辞書構造を正しく確保）
         if "selected_subversion" not in st.session_state:
             st.session_state.selected_subversion = {}
-        
+
         if fn not in st.session_state.selected_subversion:
             st.session_state.selected_subversion[fn] = {}
-        
+
         if not isinstance(st.session_state.selected_subversion[fn], dict):
             st.session_state.selected_subversion[fn] = {}
-        
+
         if ver not in st.session_state.selected_subversion[fn]:
             st.session_state.selected_subversion[fn][ver] = subversions[0]
-        
+
         subver = st.session_state.selected_subversion[fn][ver]
 
         # 現在のバージョンの index を取得
@@ -642,7 +726,7 @@ if st.session_state.groups:
         except ValueError:
             ver_idx = 0
             st.session_state.selected_version[fn] = versions[0]
-        
+
         # 現在のサブバージョンの index を取得
         try:
             subver_idx = subversions.index(subver)
@@ -656,8 +740,13 @@ if st.session_state.groups:
         row = st.columns([1, 3, 2, 2, 8])
 
         with row[0]:
-            st.checkbox("選択", key=f"sel_{fn}", label_visibility="collapsed")
-            st.session_state.selected_group[fn] = st.session_state[f"sel_{fn}"]
+            st.checkbox(
+                "選択",
+                value=st.session_state.selected_group.get(fn, False),
+                key=f"sel_{fn}",
+                on_change=make_checkbox_callback(fn),
+                label_visibility="collapsed",
+            )
 
         with row[1]:
             st.write(fn)
@@ -670,11 +759,13 @@ if st.session_state.groups:
                 key=f"ver_{fn}",
                 label_visibility="collapsed",
             )
-            
+
             # ★ 修正：バージョンが変更された場合の処理
             if new_ver != ver:
                 st.session_state.selected_version[fn] = new_ver
-                new_subversions = st.session_state.subversions_map.get(fn, {}).get(new_ver, ["-"])
+                new_subversions = st.session_state.subversions_map.get(fn, {}).get(
+                    new_ver, ["-"]
+                )
                 if fn not in st.session_state.selected_subversion:
                     st.session_state.selected_subversion[fn] = {}
                 st.session_state.selected_subversion[fn][new_ver] = new_subversions[0]
@@ -686,22 +777,28 @@ if st.session_state.groups:
         with row[3]:
             # ★ 修正：現在選択中のバージョンに基づいてサブバージョンを取得
             current_ver = st.session_state.selected_version[fn]
-            current_subversions = st.session_state.subversions_map.get(fn, {}).get(current_ver, ["-"])
-            
+            current_subversions = st.session_state.subversions_map.get(fn, {}).get(
+                current_ver, ["-"]
+            )
+
             # サブバージョンの初期化（現在のバージョン用）
             if fn not in st.session_state.selected_subversion:
                 st.session_state.selected_subversion[fn] = {}
             if current_ver not in st.session_state.selected_subversion[fn]:
-                st.session_state.selected_subversion[fn][current_ver] = current_subversions[0]
-            
+                st.session_state.selected_subversion[fn][current_ver] = (
+                    current_subversions[0]
+                )
+
             current_subver = st.session_state.selected_subversion[fn][current_ver]
-            
+
             try:
                 current_subver_idx = current_subversions.index(current_subver)
             except ValueError:
                 current_subver_idx = 0
-                st.session_state.selected_subversion[fn][current_ver] = current_subversions[0]
-            
+                st.session_state.selected_subversion[fn][current_ver] = (
+                    current_subversions[0]
+                )
+
             new_subver = st.selectbox(
                 "subver",
                 current_subversions,
@@ -714,23 +811,40 @@ if st.session_state.groups:
         with row[4]:
             # ★ 修正：現在選択中のバージョン・サブバージョンでエントリを取得
             display_ver = st.session_state.selected_version[fn]
-            display_subver = st.session_state.selected_subversion.get(fn, {}).get(display_ver, "-")
-            display_entry = st.session_state.ver_subver_to_entry_map[fn][display_ver][display_subver]
+            display_subver = st.session_state.selected_subversion.get(fn, {}).get(
+                display_ver, "-"
+            )
+            display_entry = st.session_state.ver_subver_to_entry_map[fn][display_ver][
+                display_subver
+            ]
             st.code(display_entry["rel_path"], language="")
 
 # ---------- 保存 ----------
 st.subheader("ファイルの収集・保存")
 
-st.session_state.dest_path = st.text_input(
-    "保存先フォルダ", value=st.session_state.dest_path
+st.text_input(
+    "保存先フォルダ",
+    value=st.session_state.dest_path,
+    key="_dest_path_input",
+    on_change=lambda: setattr(
+        st.session_state, "dest_path", st.session_state._dest_path_input
+    ),
 )
 
 if st.session_state.dest_history:
-    sel = st.selectbox(
-        "最近使った保存先フォルダ", ["- 選択 -"] + st.session_state.dest_history
+
+    def on_dest_history_change():
+        sel = st.session_state._dest_history_select
+        if sel != "- 選択 -":
+            st.session_state.dest_path = sel
+            st.session_state._dest_path_input = sel
+
+    st.selectbox(
+        "最近使った保存先フォルダ",
+        ["- 選択 -"] + st.session_state.dest_history,
+        key="_dest_history_select",
+        on_change=on_dest_history_change,
     )
-    if sel != "- 選択 -":
-        st.session_state.dest_path = sel
 
 
 if st.button("ファイルを保存する", type="primary"):
@@ -747,7 +861,7 @@ if st.button("ファイルを保存する", type="primary"):
                 continue
             ver = st.session_state.selected_version[fn]
             subver = st.session_state.selected_subversion.get(fn, {}).get(ver, "-")
-            
+
             # ★ 変更：バージョン + サブバージョンでエントリを取得
             entry = st.session_state.ver_subver_to_entry_map[fn][ver][subver]
             targets.append(entry)
