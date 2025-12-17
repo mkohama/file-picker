@@ -769,9 +769,11 @@ if st.session_state.groups:
         row = st.columns([1, 3, 2, 2, 8])
 
         with row[0]:
+            # ウィジェットキーの初期化（まだ存在しない場合のみ）
+            if f"sel_{fn}" not in st.session_state:
+                st.session_state[f"sel_{fn}"] = st.session_state.selected_group.get(fn, False)
             st.checkbox(
                 "選択",
-                value=st.session_state.selected_group.get(fn, False),
                 key=f"sel_{fn}",
                 on_change=make_checkbox_callback(fn),
                 label_visibility="collapsed",
