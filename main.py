@@ -465,9 +465,14 @@ with st.expander("設定の保存／ロード", expanded=False):
                         ver_subver_to_entry_map, subversions_map
                     )
 
+                    # 選択状態を新しいグループに基づいてマージ
+                    # 保存された選択状態のうち、現在のグループに存在するもののみ反映
+                    old_selected = st.session_state.selected_group.copy()
+                    st.session_state.selected_group = {
+                        fn: old_selected.get(fn, False) for fn in groups
+                    }
+
                     for fn in groups:
-                        if fn not in st.session_state.selected_group:
-                            st.session_state.selected_group[fn] = False
                         if fn not in st.session_state.selected_version:
                             latest_ver = versions_map[fn][0]
                             st.session_state.selected_version[fn] = latest_ver
