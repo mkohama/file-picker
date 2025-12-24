@@ -2,6 +2,7 @@ import os
 import re
 import json
 import shutil
+import time
 import streamlit as st
 from pathlib import Path
 from streamlit_tree_select import tree_select
@@ -27,7 +28,7 @@ DEFAULT_EXCLUDE_FILE_PATTERNS = [
     r".*コピー.*", 
     r".*copy.*",
 ]
-VERSION_REGEX = re.compile(r"\b\d+[_\.]\d+(?:[_\.]\d+)*\b")
+VERSION_REGEX = re.compile(r"\d+[_\.]\d+(?:[_\.]\d+)*")
 DATE_REGEX = re.compile(r"_(\d{8})(?=\.|$)")
 DEFAULT_PAGE_SIZE = 50
 MAX_HISTORY = 10
@@ -44,11 +45,11 @@ def get_group_key(rel_path: str):
     parts = rel_path.split(os.sep)
     # バージョンフォルダを除去（ファイル名以外のパーツから）
     non_version_parts = [
-        p for p in parts[:-1] if not re.fullmatch(r"\d+[_\.]\d+(?:[_\.]\d+)*", p)
+        p for p in parts[:-1] if not VERSION_REGEX.fullmatch(p)
     ]
     # ファイル名から日付を除去
     filename = parts[-1]
-    base_filename = re.sub(r"_\d{8}(?=\.\w+$)", "", filename)
+    base_filename = DATE_REGEX.sub("", filename)
     # グループキーを構築
     if non_version_parts:
         return os.path.join(*non_version_parts, base_filename)
@@ -553,7 +554,7 @@ def find_version_from_relpath(rel_path: str):
         return "-"
     for part in reversed(dir_part.split(os.sep)):
         # フォルダ名全体がバージョン番号の場合のみマッチ
-        if re.fullmatch(r"\d+[_\.]\d+(?:[_\.]\d+)*", part):
+        if VERSION_REGEX.fullmatch(part):
             return part.replace(".", "_")
     return "-"
 
@@ -648,7 +649,7 @@ def build_group_struct(entries):
             fn = e["file_name"]
 
             # ファイル名から日付（サブバージョン）を抽出
-            date_match = re.search(r"_(\d{8})(?=\.\w+$)", fn)
+            date_match = DATE_REGEX.search(fn)
             subver = date_match.group(1) if date_match else "-"
 
             if ver not in ver_subver_map:
@@ -678,19 +679,9 @@ def build_group_struct(entries):
             latest_subver = subversions_map[base_name][ver][0]
             ver_to_entry_map[base_name][ver] = ver_subver_map[ver][latest_subver]
 
-        # グループのアイテムをソート
+        # グループのアイテムをソート（計算済みのsubversionを使用）
         items.sort(
-            key=lambda x: (
-                version_key(x["version"]),
-                (
-                    "",
-                    (
-                        re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"]).group(1)
-                        if re.search(r"_(\d{8})(?=\.\w+$)", x["file_name"])
-                        else "-"
-                    ),
-                ),
-            ),
+            key=lambda x: (version_key(x["version"]), x["subversion"]),
             reverse=True,
         )
         groups[base_name] = items
@@ -719,47 +710,64 @@ with st.sidebar:
             if st.session_state.search_path and os.path.isdir(
                 st.session_state.search_path
             ):
-                ex_dirs = normalize_exclude_dirs(st.session_state.exclude_dirs)
-                inc_exts = normalize_include_exts(st.session_state.include_exts)
-                ex_patterns = st.session_state.exclude_file_patterns
+                times = {}
 
-                entries = search_files(
-                    st.session_state.search_path, ex_dirs, inc_exts, ex_patterns
-                )
-                (
-                    groups,
-                    versions_map,
-                    ver_to_entry_map,
-                    ver_subver_to_entry_map,
-                    subversions_map,
-                ) = build_group_struct(entries)
+                with st.spinner("ファイルを検索中..."):
+                    start = time.time()
+                    ex_dirs = normalize_exclude_dirs(st.session_state.exclude_dirs)
+                    inc_exts = normalize_include_exts(st.session_state.include_exts)
+                    ex_patterns = st.session_state.exclude_file_patterns
+                    entries = search_files(
+                        st.session_state.search_path, ex_dirs, inc_exts, ex_patterns
+                    )
+                    times["検索"] = time.time() - start
 
-                store_search_results(
-                    entries,
-                    groups,
-                    versions_map,
-                    ver_to_entry_map,
-                    ver_subver_to_entry_map,
-                    subversions_map,
-                )
+                with st.spinner(f"グループ構造を構築中... ({len(entries)} 件)"):
+                    start = time.time()
+                    (
+                        groups,
+                        versions_map,
+                        ver_to_entry_map,
+                        ver_subver_to_entry_map,
+                        subversions_map,
+                    ) = build_group_struct(entries)
+                    times["グループ構築"] = time.time() - start
 
-                old_selected = st.session_state.selected_group.copy()
-                st.session_state.selected_group = {
-                    fn: old_selected.get(fn, False) for fn in groups
-                }
+                with st.spinner("選択状態をマージ中..."):
+                    start = time.time()
+                    store_search_results(
+                        entries,
+                        groups,
+                        versions_map,
+                        ver_to_entry_map,
+                        ver_subver_to_entry_map,
+                        subversions_map,
+                    )
 
-                for fn in groups:
-                    if fn not in st.session_state.selected_version:
-                        latest_ver = versions_map[fn][0]
-                        st.session_state.selected_version[fn] = latest_ver
-                        st.session_state.selected_subversion[fn] = {
-                            latest_ver: subversions_map[fn][latest_ver][0]
-                        }
+                    old_selected = st.session_state.selected_group.copy()
+                    st.session_state.selected_group = {
+                        fn: old_selected.get(fn, False) for fn in groups
+                    }
 
-                # グループ選択 → パス選択に同期（ツリービュー用）
-                sync_group_to_paths()
+                    for fn in groups:
+                        if fn not in st.session_state.selected_version:
+                            latest_ver = versions_map[fn][0]
+                            st.session_state.selected_version[fn] = latest_ver
+                            st.session_state.selected_subversion[fn] = {
+                                latest_ver: subversions_map[fn][latest_ver][0]
+                            }
+                    times["マージ"] = time.time() - start
 
-                st.info(f"再検索（{len(entries)} 件）")
+                with st.spinner("ツリービューと同期中..."):
+                    start = time.time()
+                    # グループ選択 → パス選択に同期（ツリービュー用）
+                    sync_group_to_paths()
+                    times["同期"] = time.time() - start
+
+                # 経過時間を表示
+                total = sum(times.values())
+                time_str = " / ".join([f"{k}: {v:.1f}秒" for k, v in times.items()])
+                st.info(f"完了（{len(entries)}件）- {time_str} / 合計: {total:.1f}秒")
 
         if st.button("設定をロード", use_container_width=True):
             ok = load_config()
@@ -832,80 +840,94 @@ with st.sidebar:
         if not path or not os.path.isdir(path):
             st.error("検索フォルダが不正です。")
         else:
-            ex_dirs = normalize_exclude_dirs(st.session_state.exclude_dirs)
-            inc_exts = normalize_include_exts(st.session_state.include_exts)
-            ex_patterns = st.session_state.exclude_file_patterns
+            times = {}
 
-            entries = search_files(path, ex_dirs, inc_exts, ex_patterns)
-            (
-                groups,
-                versions_map,
-                ver_to_entry_map,
-                ver_subver_to_entry_map,
-                subversions_map,
-            ) = build_group_struct(entries)
+            with st.spinner("ファイルを検索中..."):
+                start = time.time()
+                ex_dirs = normalize_exclude_dirs(st.session_state.exclude_dirs)
+                inc_exts = normalize_include_exts(st.session_state.include_exts)
+                ex_patterns = st.session_state.exclude_file_patterns
+                entries = search_files(path, ex_dirs, inc_exts, ex_patterns)
+                times["検索"] = time.time() - start
 
-            store_search_results(
-                entries,
-                groups,
-                versions_map,
-                ver_to_entry_map,
-                ver_subver_to_entry_map,
-                subversions_map,
-            )
+            with st.spinner(f"グループ構造を構築中... ({len(entries)} 件)"):
+                start = time.time()
+                (
+                    groups,
+                    versions_map,
+                    ver_to_entry_map,
+                    ver_subver_to_entry_map,
+                    subversions_map,
+                ) = build_group_struct(entries)
+                times["グループ構築"] = time.time() - start
 
-            # 以前の選択状態を保持
-            old_selected_group = st.session_state.selected_group.copy()
-            old_selected_version = st.session_state.selected_version.copy()
-            old_selected_subversion = st.session_state.selected_subversion.copy()
+            with st.spinner("選択状態をマージ中..."):
+                start = time.time()
+                store_search_results(
+                    entries,
+                    groups,
+                    versions_map,
+                    ver_to_entry_map,
+                    ver_subver_to_entry_map,
+                    subversions_map,
+                )
 
-            # 新しいグループに対して選択状態をマージ
-            st.session_state.selected_group = {
-                fn: old_selected_group.get(fn, False) for fn in groups
-            }
+                # 以前の選択状態を保持
+                old_selected_group = st.session_state.selected_group.copy()
+                old_selected_version = st.session_state.selected_version.copy()
+                old_selected_subversion = st.session_state.selected_subversion.copy()
 
-            # バージョン選択をマージ
-            st.session_state.selected_version = {}
-            for fn in versions_map:
-                if (
-                    fn in old_selected_version
-                    and old_selected_version[fn] in versions_map[fn]
-                ):
-                    st.session_state.selected_version[fn] = old_selected_version[fn]
-                else:
-                    st.session_state.selected_version[fn] = versions_map[fn][0]
+                # 新しいグループに対して選択状態をマージ
+                st.session_state.selected_group = {
+                    fn: old_selected_group.get(fn, False) for fn in groups
+                }
 
-            # サブバージョン選択をマージ
-            st.session_state.selected_subversion = {}
-            for fn in versions_map:
-                ver = st.session_state.selected_version[fn]
-                available_subvers = subversions_map.get(fn, {}).get(ver, ["-"])
-                old_fn_subvers = old_selected_subversion.get(fn, {})
-                if isinstance(old_fn_subvers, dict) and ver in old_fn_subvers:
-                    old_subver = old_fn_subvers[ver]
-                    if old_subver in available_subvers:
-                        st.session_state.selected_subversion[fn] = {ver: old_subver}
+                # バージョン選択をマージ
+                st.session_state.selected_version = {}
+                for fn in versions_map:
+                    if (
+                        fn in old_selected_version
+                        and old_selected_version[fn] in versions_map[fn]
+                    ):
+                        st.session_state.selected_version[fn] = old_selected_version[fn]
+                    else:
+                        st.session_state.selected_version[fn] = versions_map[fn][0]
+
+                # サブバージョン選択をマージ
+                st.session_state.selected_subversion = {}
+                for fn in versions_map:
+                    ver = st.session_state.selected_version[fn]
+                    available_subvers = subversions_map.get(fn, {}).get(ver, ["-"])
+                    old_fn_subvers = old_selected_subversion.get(fn, {})
+                    if isinstance(old_fn_subvers, dict) and ver in old_fn_subvers:
+                        old_subver = old_fn_subvers[ver]
+                        if old_subver in available_subvers:
+                            st.session_state.selected_subversion[fn] = {ver: old_subver}
+                        else:
+                            st.session_state.selected_subversion[fn] = {
+                                ver: available_subvers[0]
+                            }
                     else:
                         st.session_state.selected_subversion[fn] = {
                             ver: available_subvers[0]
                         }
-                else:
-                    st.session_state.selected_subversion[fn] = {
-                        ver: available_subvers[0]
-                    }
 
-            st.session_state.page = 1
-            st.session_state.search_history = push_history(
-                st.session_state.search_history, path
-            )
+                st.session_state.page = 1
+                st.session_state.search_history = push_history(
+                    st.session_state.search_history, path
+                )
+                times["マージ"] = time.time() - start
 
+            # 経過時間を表示
+            total = sum(times.values())
+            time_str = " / ".join([f"{k}: {v:.1f}秒" for k, v in times.items()])
             preserved_count = sum(
                 1 for v in st.session_state.selected_group.values() if v
             )
             if preserved_count > 0:
-                st.success(f"{len(entries)} 件（{preserved_count} 件維持）")
+                st.success(f"{len(entries)}件（{preserved_count}件維持）- {time_str} / 合計: {total:.1f}秒")
             else:
-                st.success(f"{len(entries)} 件")
+                st.success(f"{len(entries)}件 - {time_str} / 合計: {total:.1f}秒")
 
     if clear_state:
         clear_search_results()
@@ -1266,10 +1288,11 @@ with tab_tree:
         st.divider()
 
         # ツリー構造を構築
-        nodes = build_tree_nodes(st.session_state.entries)
+        with st.spinner("ツリー構造を構築中..."):
+            nodes = build_tree_nodes(st.session_state.entries)
 
-        # 有効なファイルパスのセットを作成（フォルダ除外用）
-        valid_file_paths = {e["abs_path"] for e in st.session_state.entries}
+            # 有効なファイルパスのセットを作成（フォルダ除外用）
+            valid_file_paths = {e["abs_path"] for e in st.session_state.entries}
 
         # バージョン番号付きの key を使用
         # グループビューから同期されると version がインクリメントされ、新しいコンポーネントが作成される
