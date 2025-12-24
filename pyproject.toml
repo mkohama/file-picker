@@ -1,10 +1,19 @@
 [project]
 name = "file-pick"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "ファイル検索・収集ツール"
 requires-python = ">=3.13"
 dependencies = [
     "pandas>=2.3.3",
     "streamlit>=1.52.1",
+    "streamlit-tree-select>=0.0.5",
 ]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+file-picker = "file_picker_cli:main"
+
+[tool.setuptools]
+py-modules = ["main", "file_picker_cli"]

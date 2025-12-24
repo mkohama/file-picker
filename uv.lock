@@ -123,16 +123,18 @@ wheels = [
 [[package]]
 name = "file-pick"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "pandas" },
     { name = "streamlit" },
+    { name = "streamlit-tree-select" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "streamlit", specifier = ">=1.52.1" },
+    { name = "streamlit-tree-select", specifier = ">=0.0.5" },
 ]
 
 [[package]]
@@ -651,6 +653,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6f/ec/66ca1578587bbaaea5757a7f074d3f762fff8d782ffb4497a83c5722aa44/streamlit-1.52.1.tar.gz", hash = "sha256:b036a71866b893c97fdebaa2a2ebd21ebf2af7daea4b3abe783a57b26f55b3ca", size = 8582829, upload-time = "2025-12-05T18:55:42.006Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/d4/cdafd4cc940937410f465ca7a77dd34237182c2ddece624e08db959496f8/streamlit-1.52.1-py3-none-any.whl", hash = "sha256:97fee2c3421d350fd65548e45a20f506ec1b651d78f95ecacbc0c2f9f838081c", size = 9024748, upload-time = "2025-12-05T18:55:39.713Z" },
+]
+
+[[package]]
+name = "streamlit-tree-select"
+version = "0.0.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/b5/ec39a5b4cce1fb1cc920d341263bc1f08f73412eb10ea09df7c5e0566a4f/streamlit-tree-select-0.0.5.tar.gz", hash = "sha256:985f5d4c357c403723fd69d4c4fca38193e0f9105974ec36259c43d9e6b78044", size = 1205495, upload-time = "2022-09-05T14:08:51.938Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/02/8e298f4a4556d2f1ceecc0fcde9a795596520b681aeff4288e5daac588e6/streamlit_tree_select-0.0.5-py3-none-any.whl", hash = "sha256:9bfee4d9394fcb0b3e98801cca32f179c85f9f7fdf7005904bf88811f73db05c", size = 1225810, upload-time = "2022-09-05T14:08:50.009Z" },
 ]
 
 [[package]]
